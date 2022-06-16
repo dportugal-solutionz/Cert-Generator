@@ -461,6 +461,7 @@ keyUsage               = critical, digitalSignature, cRLSign, keyCertSign
 
     Show-Cert -file $outputFile
     Copy-Item $settingsfile -Destination $outputDirectory
+    Copy-Item $outputFile -Destination $rootDirectory/root_cert.cer
     return
 }
 
@@ -593,6 +594,8 @@ keyUsage               = critical, digitalSignature, cRLSign, keyCertSign
     }
 
     Show-Cert -file $intCert
+    Copy-Item $intCert "$intDirectory\intermediate_cert.cer"
+
     return
 }
 
