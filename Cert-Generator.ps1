@@ -1,58 +1,38 @@
-##########################################################################################
-# CHANGE THESE SETTINGS
-##########################################################################################
-$devices=@(
-    '172.16.48.12'
-    ,'172.16.48.36'
-    ,'172.16.48.39'
-);
-
-$sslCountry="US"
-$sslState="California"
-$sslLocality="La Mirada"
-$sslOrg="Spinitar"
-$sslOrgUnit="Programming"
-$sslEmail="programming@spinitar.com"
-$sslRootCN="Spinitar Programming TB RCert"
-$sslIntermediateCN="Spinitar Programming TB ICert"
-
-# Root CA passphrase
-$rootPassword="certificaterootpassword"
-
-# Intermediate Cert passphrase
-$intermediatePassword="certificateintermediatepassword"
-
-# Device Cert passphrase
-$devicePassword="agenericpasswordfordevices"
-
-# Password for PFX export
-$exportPassword="spinitar"
-
-##########################################################################################
-# CHANGE ONLY IF NEEDED
-##########################################################################################
-#OUTPUT FOLDER NAMES
-$outputFolder="ProgrammingTB"
-$rootFolder="Root"
-$intFolder="Intermediate"
-
-$sslsha="sha256"
-$sslrootdays="7300" #20 years
-$sslintdays="3650"  #10 years
-$sslsrvdays="800"   #about 2 years
 
 
 ##########################################################################################
-## DO NOT CHANGE
+# GLOBAL VARS
 ##########################################################################################
-$outputDirectory="$PSScriptRoot\$outputFolder"
-$rootDirectory="$outputDirectory\$rootFolder"
-$intDirectory="$outputDirectory\$intFolder"
+# these get overwritten by the ini file
+$global:devices=@()
+$global:sslCountry=""
+$global:sslState=""
+$global:sslLocality=""
+$global:sslOrg=""
+$global:sslOrgUnit=""
+$global:sslEmail=""
+$global:sslRootCN=""
+$global:sslIntermediateCN=""
+$global:rootPassword=""
+$global:intermediatePassword=""
+$global:devicePassword=""
+$global:exportPassword=""
+$global:outputFolder=""
+$global:rootFolder=""
+$global:intFolder=""
+$global:sslsha=""
+$global:sslrootdays=""
+$global:sslintdays=""
+$global:sslsrvdays=""
 
-############################################################################################
-# Some global vars
-############################################################################################
-$StepThroughAll = $false
+#these will be calculated
+$global:outputDirectory=""
+$global:rootDirectory=""
+$global:intDirectory=""
+
+$global:StepThroughAll = $false
+$global:settingsfile = 'settings.ini'
+$global:settings="";
 
 ############################################################################################
 # do the press any key to continue
@@ -67,10 +47,263 @@ function PressAnyKeyToContinue(){
     }
 }
 
+##########################################################################################
+# Write the default settings.ini
+##########################################################################################
+function Write-DefaultSettings(){
+    $settings=@"
+
+;comments start with a semicolon
+[Devices]
+device[]                = "192.168.11"
+device[]                = "192.168.41"
+
+[SSLInformation]
+Country                 = "US"
+State                   = "AnyState"
+Locality                = "Anytown"
+Organization            = "Some Company"
+OrgUnit                 = "Audio Video"
+Email                   = "avcert@audiovideo.com"
+RootCertName            = "Audio-Video Root Cert"
+IntermediateCertName    = "Audio-Video Intermediate Cert"
+SHA                     = "sha256"
+RootCertValidityDays    = "7300"
+IntermediateCertValidity= "3650"
+DeviceCertValidity      = "730"
+
+[Passwords]
+RootPassword            = "1234567890"
+IntermediatePassword    = "1234567890"
+DevicePassword          = "1234567890"
+PFXPassword             = "1234567890"
+
+[OutputFolderNames]
+OutputFolder            = "Output"
+RootFolder              = "Root"
+IntermediateFolder      = "Intermediate"
+"@
+
+    New-Item -path $settingsfile -ItemType file
+    Set-Content -Path $settingsfile -Value $settings
+}
+
+##########################################################################################
+# read and parse the contents of settings.ini
+##########################################################################################
+function Parse-SettingsIni(){
+    Write-Host 'Parsing Settings'
+    if ((Test-Path $settingsfile) -eq $false) {
+        Write-Host "Settings file not found"
+        $r = Read-Host -Prompt "create default settings [n]/y"
+        if ($r -eq 'y'){
+            Write-DefaultSettings
+        }
+        Pause
+        return
+    }
+
+    #the following taken from https://stackoverflow.com/questions/417798/ini-file-parsing-in-powershell
+    $ini = [ordered]@{}
+    $count = @{}
+    switch -regex -file $settingsfile
+    {
+        #Section.
+        "^\[(.+)\]$" {
+            $section = $matches[1].Trim()
+            $ini[$section] = [ordered]@{}
+            $count[$section] = @{}
+            $CommentCount = 0
+            continue
+        }
+        # Comment
+        "^(;.*)$" {
+            $value = $matches[1]
+            $CommentCount = $CommentCount + 1
+            $name = "Comment" + $CommentCount
+            if ($section -eq $null) {
+                $section = "header"
+                $ini[$section] = [ordered]@{}
+            }
+            $ini[$section][$name] = $value
+            continue
+        }
+
+        #Array Int.
+        "^\s*([^#][\w\d_-]+?)\[]\s*=\s*(\d+)\s*$"{
+            $name,$value = $matches[1..2]
+            if (!$ini[$section][$name]) {
+                $ini[$section][$name] = [ordered]@{}
+            }
+            if (!$count[$section][$name]) {
+                $count[$section][$name] = 0
+            }
+            $ini[$section][$name].Add($count[$section][$name], [int]$value)
+            $count[$section][$name] += 1
+            continue
+        }
+        #Array Decimal
+        "^\s*([^#][\w\d_-]+?)\[]\s*=\s*(\d+\.\d+)\s*$" {
+            $name,$value = $matches[1..2]
+            if (!$ini[$section][$name]) {
+                $ini[$section][$name] = [ordered]@{}
+            }
+            if (!$count[$section][$name]) {
+                $count[$section][$name] = 0
+            }
+            $ini[$section][$name].Add($count[$section][$name], [decimal]$value)
+            $count[$section][$name] += 1
+            continue
+        }
+        #Array Everything else
+        "^\s*([^#][\w\d_-]+?)\[]\s*=\s*(.*)" {
+            $name,$value = $matches[1..2]
+            if (!$ini[$section][$name]) {
+                $ini[$section][$name] = [ordered]@{}
+            }
+            if (!$count[$section][$name]) {
+                $count[$section][$name] = 0
+            }
+            $ini[$section][$name].Add($count[$section][$name], $value.Trim())
+            $count[$section][$name] += 1
+            continue
+        }
+
+        #Array associated Int.
+        "^\s*([^#][\w\d_-]+?)\[([\w\d_-]+?)]\s*=\s*(\d+)\s*$" {
+            $name, $association, $value = $matches[1..3]
+            if (!$ini[$section][$name]) {
+                $ini[$section][$name] = [ordered]@{}
+            }
+            $ini[$section][$name].Add($association, [int]$value)
+            continue
+        }
+        #Array associated Decimal
+        "^\s*([^#][\w\d_-]+?)\[([\w\d_-]+?)]\s*=\s*(\d+\.\d+)\s*$" {
+            $name, $association, $value = $matches[1..3]
+            if (!$ini[$section][$name]) {
+                $ini[$section][$name] = [ordered]@{}
+            }
+            $ini[$section][$name].Add($association, [decimal]$value)
+            continue
+        }
+        #Array associated Everything else
+        "^\s*([^#][\w\d_-]+?)\[([\w\d_-]+?)]\s*=\s*(.*)" {
+            $name, $association, $value = $matches[1..3]
+            if (!$ini[$section][$name]) {
+                $ini[$section][$name] = [ordered]@{}
+            }
+            $ini[$section][$name].Add($association, $value.Trim())
+            continue
+        }
+
+        #Int.
+        "^\s*([^#][\w\d_-]+?)\s*=\s*(\d+)\s*$" {
+            $name,$value = $matches[1..2]
+            $ini[$section][$name] = [int]$value
+            continue
+        }
+        #Decimal.
+        "^\s*([^#][\w\d_-]+?)\s*=\s*(\d+\.\d+)\s*$" {
+            $name,$value = $matches[1..2]
+            $ini[$section][$name] = [decimal]$value
+            continue
+        }
+        #Everything else.
+        "^\s*([^#][\w\d_-]+?)\s*=\s*(.*)" {
+            $name,$value = $matches[1..2]
+            $ini[$section][$name] = $value.Trim()
+            continue
+        }
+    }
+
+    Set-Variable -Name settings -Value $ini -Scope Global
+}
+
+##########################################################################################
+# Initialize global variables
+##########################################################################################
+function Do-Initialize(){
+    Parse-SettingsIni
+
+    ForEach ($section in $settings.Keys){
+        #Write-Host "Section: $section" -ForegroundColor Cyan
+        if ($section -eq "Devices"){
+            $d = @()
+            ForEach ($property in $settings[$section].Keys){
+                $value = $settings[$section][$property]
+                if ($value -is [System.Collections.Specialized.OrderedDictionary]){
+                    ForEach ($k in $value.Keys){
+                        #$v = $value[$k]
+                        #$h = "$property" + "[" + $k + "]"
+                        #Write-Host "$h=$v"
+                        $d += $value[$k]
+                    }
+                }
+                #Write-Host "$property = $value"
+            }
+        }
+    }
+
+    #Set-Variable -Name devices              -Value $settings["Devices"]["device"]                          -Scope Global
+    Set-Variable -Name devices              -Value $d                                                      -Scope Global
+    Set-Variable -Name sslCountry           -Value $settings["SSLInformation"]["Country"]                  -Scope Global
+    Set-Variable -Name sslState             -Value $settings["SSLInformation"]["State"]                    -Scope Global
+    Set-Variable -Name sslLocality          -Value $settings["SSLInformation"]["Locality"]                 -Scope Global
+    Set-Variable -Name sslOrg               -Value $settings["SSLInformation"]["Organization"]             -Scope Global
+    Set-Variable -Name sslOrgUnit           -Value $settings["SSLInformation"]["OrgUnit"]                  -Scope Global
+    Set-Variable -Name sslEmail             -Value $settings["SSLInformation"]["Email"]                    -Scope Global
+    Set-Variable -Name sslRootCN            -Value $settings["SSLInformation"]["RootCertName"]             -Scope Global
+    Set-Variable -Name sslIntermediateCN    -Value $settings["SSLInformation"]["IntermediateCertName"]     -Scope Global
+    Set-Variable -Name sslsha               -Value $settings["SSLInformation"]["SHA"]                      -Scope Global
+    Set-Variable -Name sslrootdays          -Value $settings["SSLInformation"]["RootCertValidityDays"]     -Scope Global
+    Set-Variable -Name sslintdays           -Value $settings["SSLInformation"]["IntermediateCertValidity"] -Scope Global
+    Set-Variable -Name sslsrvdays           -Value $settings["SSLInformation"]["DeviceCertValidity"]       -Scope Global
+    Set-Variable -Name rootPassword         -Value $settings["Passwords"]["RootPassword"]                  -Scope Global
+    Set-Variable -Name intermediatePassword -Value $settings["Passwords"]["IntermediatePassword"]          -Scope Global
+    Set-Variable -Name devicePassword       -Value $settings["Passwords"]["DevicePassword"]                -Scope Global
+    Set-Variable -Name exportPassword       -Value $settings["Passwords"]["PFXPassword"]                   -Scope Global
+    Set-Variable -Name outputFolder         -Value $settings["OutputFolderNames"]["OutputFolder"]          -Scope Global
+    Set-Variable -Name rootFolder           -Value $settings["OutputFolderNames"]["RootFolder"]            -Scope Global
+    Set-Variable -Name intFolder            -Value $settings["OutputFolderNames"]["IntermediateFolder"]    -Scope Global
+
+    Set-Variable -Name outputDirectory -Value "$PSScriptRoot\$outputFolder" -Scope Global
+    Set-Variable -Name rootDirectory -Value "$outputDirectory\$rootFolder" -Scope Global
+    Set-Variable -Name intDirectory -Value "$outputDirectory\$intFolder" -Scope Global
+}
+function Show-Settings{
+
+    Write-Host "devices              :" $devices
+    Write-Host "sslCountry           :" $sslCountry
+    Write-Host "sslState             :" $sslState
+    Write-Host "sslLocality          :" $sslLocality
+    Write-Host "sslOrg               :" $sslOrg
+    Write-Host "sslOrgUnit           :" $sslOrgUnit
+    Write-Host "sslEmail             :" $sslEmail
+    Write-Host "sslRootCN            :" $sslRootCN
+    Write-Host "sslIntermediateCN    :" $sslIntermediateCN
+    Write-Host "rootPassword         :" $rootPassword
+    Write-Host "intermediatePassword :" $intermediatePassword
+    Write-Host "devicePassword       :" $devicePassword
+    Write-Host "exportPassword       :" $exportPassword
+    Write-Host "outputFolder         :" $outputFolder
+    Write-Host "rootFolder           :" $rootFolder
+    Write-Host "intFolder            :" $intFolder
+    Write-Host "sslsha               :" $sslsha
+    Write-Host "sslrootdays          :" $sslrootdays
+    Write-Host "sslintdays           :" $sslintdays
+    Write-Host "sslsrvdays           :" $sslsrvdays
+    Write-Host "outputDirectory      :" $outputDirectory
+    Write-Host "rootDirectory        :" $rootDirectory
+    Write-Host "intDirectory         :" $intDirectory
+    Pause
+}
+
 ############################################################################################
 # Creates the directory if needed
 ############################################################################################
-function New-Directory($directory){
+function New-Directory{
+    param([string] $directory)
     $exists = Test-Path -Path $directory
     if ($exists -eq $false){
         New-Item -Path $directory -ItemType directory
@@ -80,20 +313,27 @@ function New-Directory($directory){
 ############################################################################################
 # Create a file at the given directory. Overwrites any contents with the given argument
 ############################################################################################
-function New-File($directory,$filename,$contents){
+function New-File{
+    param(
+        [string] $directory,
+        [string] $filename,
+        [string] $contents
+    )
     $filepath="$directory\$filename"
     $exists = Test-Path $filepath -PathType Leaf
     if ($exists -eq $false){
         New-Item -path $filepath -ItemType file
         Write-Host "File created: $filepath" -ForegroundColor Green
-        Set-Content -Path $filepath -Value $contents
+        if (($contents -ne "") -and ($null -ne $contents )){
+            Set-Content -Path $filepath -Value $contents
+        }
         $size = (Get-Item $filepath).length
         Write-Host "File Size:$size" -ForegroundColor Green
     }
     else{
         Set-Content -Path $filepath -Value $contents
         $size = (Get-Item $filepath).length
-        Write-Host "File already exists: $filepath" -ForegroundColor Yellow
+        Write-Host "File already exists: $filepath"-ForegroundColor Yellow
         Write-Host "File Size:$size" -ForegroundColor Green
     }
 }
@@ -101,11 +341,12 @@ function New-File($directory,$filename,$contents){
 ############################################################################################
 # Creates a new key.pem
 ############################################################################################
-function New-Key($outputfile,$passphrase){
+function New-Key{
+    param([string] $outputfile,[string] $passphrase)
     Write-Host "Generating Key $outputfile with passphrase $passphrase"
     &openssl genpkey -algorithm RSA -out $outputfile -aes-256-cbc -pkeyopt rsa_keygen_bits:2048 -pass pass:$passphrase
     if ((Test-Path -path $outputfile) -eq $false) {
-        Write-Host "ERROR: Key file not found - $outputfile" -ForegroundColor Magenta
+        Write-Host "ERROR: Key file not found - $outputfile"-ForegroundColor Magenta
         PressAnyKeyToContinue
         return
     }
@@ -115,7 +356,8 @@ function New-Key($outputfile,$passphrase){
 ############################################################################################
 # Executes the SSL to show the cert on the screen
 ############################################################################################
-function Show-Cert($file) {
+function Show-Cert{
+    param([string] $file)
     if ($StepThroughAll -eq $false){
         $response = Read-Host -Prompt "View the Cert y/[n]"
         if($response.ToLower() -eq 'y'){
@@ -128,7 +370,14 @@ function Show-Cert($file) {
 ############################################################################################
 # Executes the SSL to create a new Root Cert
 ############################################################################################
-function New-RootCert($outputfile,$passphrase,$configfile,$days,$keyfile){
+function New-RootCert{
+    param(
+        [string] $outputfile,
+        [string] $passphrase,
+        [string] $configfile,
+        [string] $days,
+        [string] $keyfile
+    )
     Write-Host "Generating Root Cert $outputfile"
     Write-Host "using Passphrase:$passphrase"
     Write-Host "using Config:    $configfile"
@@ -211,13 +460,20 @@ keyUsage               = critical, digitalSignature, cRLSign, keyCertSign
     $cerResult = New-RootCert -outputfile $outputFile -passphrase $rootPassword -config $configFile -days $sslrootdays -key $keyFile
 
     Show-Cert -file $outputFile
+    Copy-Item $settingsfile -Destination $outputDirectory
     return
 }
 
 ############################################################################################
 # Executes the SSL to create a CSR
 ############################################################################################
-function New-IntermediateCSR($outputfile, $passphrase, $configfile, $keyfile){
+function New-IntermediateCSR{
+    param(
+        [string] $outputfile,
+        [string] $passphrase,
+        [string] $configfile,
+        [string] $keyfile
+    )
     Write-Host "Generating Intermediate CSR $outputfile"
     &openssl req -passin pass:$passphrase -config $configfile -new -$sslsha -key $keyfile -out $outputfile
     if ((Test-Path -path $outputfile) -eq $false){
@@ -360,7 +616,8 @@ Function Remove-InvalidFileNameChars {
 ############################################################################################
 # Create the Device CSR Config
 ############################################################################################
-function New-DeviceCsrConfig($outputDir) {
+function New-DeviceCsrConfig{
+    param([string]$outputDir)
     $config = @"
 [ ca ]
 default_ca         = CA_default
@@ -401,7 +658,8 @@ CN                 = $deviceHostName
 ############################################################################################
 # Create the Device CSR
 ############################################################################################
-function New-DeviceCsr($outputDir){
+function New-DeviceCsr{
+    param([string]$outputDir)
     Write-Host "Generating Device csr.pem"
     $key = "$outputDir\key.pem"
     $config = "$outputDir\csr-ssl.cnf"
@@ -420,8 +678,8 @@ function New-DeviceCsr($outputDir){
 ############################################################################################
 # Create the Device Config
 ############################################################################################
-function New-DeviceConfig($outputDir){
-
+function New-DeviceConfig{
+    param([string]$outputDir)
     #path here is used in the config file to refer to the signing cert which is the intermediate cert
     $path = "$outputFolder/$intFolder"
     $config = @"
@@ -486,7 +744,8 @@ extendedKeyUsage       = serverAuth
 ############################################################################################
 # Generate a single Device Cert
 ############################################################################################
-function Write-DeviceCert($deviceHostName){
+function Write-DeviceCert{
+    param([string]$deviceHostName)
     Write-Host ""
     Write-Host "------------------------------------------------------" -ForegroundColor Yellow
     Write-Host "Writing Cert for $deviceHostName" -ForegroundColor Yellow
@@ -594,7 +853,6 @@ function Read-Menu(){
         1 {
             Write-RootCert
             break;
-
         }
         2 {
             Write-IntermediateCert
@@ -639,15 +897,31 @@ function Read-Menu(){
                 $ips = $ipstart -split "\."
                 [int]$start = [int]$ips[3];
                 [int]$end = $start + $qty - 1;
-                for($i=$start; $i -le $end; $i++){
-                    $ip = $ips[0]+'.'+$ips[1]+'.'+$ips[2]+'.'+$i
-                    Write-DeviceCert $ip
+                if ($end -gt 255){
+                    Write-Host "Invalid Ip Address range" -ForegroundColor Magenta
+                }
+                else{
+                    for($i=$start; $i -le $end; $i++){
+                        $ip = $ips[0]+'.'+$ips[1]+'.'+$ips[2]+'.'+$i
+                        Write-DeviceCert $ip
+                    }
                 }
             }
             else{
                 Write-Host "invalid ip address" -ForegroundColor Yellow
                 PressAnyKeyToContinue
             }
+        }
+        s {
+            Show-Settings
+        }
+        z {
+            $compress = @{
+                Path = $outputDirectory
+                CompressionLevel = "Fastest"
+                DestinationPath = "$outputFolder.zip"
+            }
+            Compress-Archive @compress
         }
         x {
             Clear-Host
@@ -673,13 +947,39 @@ function Show-Menu(){
     Write-Host "5. Do Step 4 then 1 through 3"
     Write-Host "6. Create a Cert for single device"
     Write-Host "7. Create Certs for a range of Ip"
+    Write-Host "s. View Settings"
+    Write-Host "z. Zip Output"
     Write-Host "x. Exit";
     Read-Menu
 }
 
 ############################################################################################
+# Check for openssl exe
+############################################################################################
+function Check-OpenSSL() {
+    $r = &openssl version
+    $t = $r.Contains("OpenSSL")
+    return $t
+}
+
+############################################################################################
 # MAIN
 ############################################################################################
+$o = Check-OpenSSL
+if ($o -eq $false) {
+    -ForegroundColor Yellow
+    -ForegroundColor Yellow
+    -ForegroundColor Yellow
+    $r = Read-Host -Prompt "open the link [n]/y"
+    if ($r -eq "y") {
+        Start-Process "https://slproweb.com/products/Win32OpenSSL.html"
+    }
+    Pause
+    Exit
+}
+
+Do-Initialize
+
 Set-Location $PSScriptRoot
 do {
     Show-Menu
