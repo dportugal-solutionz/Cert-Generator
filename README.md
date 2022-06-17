@@ -10,47 +10,61 @@ Ideas taken from Crestron COSU (https://github.com/Crestron/cosu)
 modified to run on powershell
 modified because COSU ran into too many errors and typos
 
-## Modify the Powershell
-```powershell
-##########################################################################################
-# CHANGE THESE SETTINGS
-##########################################################################################
-$devices=@(
-    '10.50.99.*'
-    ,'10.50.99.29'
-    ,'10.50.99.30'
-    ,'10.50.99.31'
-    ,'10.50.99.32'
-    ,'10.50.99.33'
-    ,'10.50.99.34'
-    ,'10.50.99.35'
-    ,'10.50.99.36'
-);
+## Settings
+- script has been modified to use a settings.ini file
+- this file must be in the same location as cert-generator.ps1
+- a sample of the ini file:
+``` ini
+;comments start with a semicolon
+;in line comments are not parsed, so do not do them
+;this file needs to be in the same location as Cert-Generator.ps1
+;this file will be copied to the output folder when creating a root cert
 
-$sslCountry="US"
-$sslState="California"
-$sslLocality="Irvine"
-$sslOrg="Edwards-Spinitar"
-$sslOrgUnit="AV"
-$sslEmail="av@edwards.com"
-$sslIntermediateCN="EdwardsAV Signing Cert"
-$sslRootCN="EdwardsAV Root Cert"
+[Devices]
+;Add an entry for each device here
+;ip and hostnames are valid
+;you can use wildcards for hostname replacements such as *.myavnetwork.com
+devices[]               = 192.168.1.11
+devices[]               = 192.168.1.12
 
-# Root CA passphrase
-$rootPassword="spinitar"
+[SSLInformation]
+;this section handles the certificate information
+Country                 = US
+State                   = CA
+Locality                = La Mirada
+Organization            = Spinitar
+OrgUnit                 = Programming
+Email                   = programming@spinitar.com
+RootCertName            = AV Root Cert
+IntermediateCertName    = AV Intermediate Cert
+SHA                     = sha256
+RootCertValidityDays    = 7300
+IntermediateCertValidity= 3650
+DeviceCertValidity      = 730
 
-# Intermediate Cert passphrase
-$intermediatePassword="spinitar"
+[Passwords]
+;this section handles the passphrases used to generate the key.pem files
+RootPassword            = 1234567890
+IntermediatePassword    = 1234567890
+DevicePassword          = 1234567890
+PFXPassword             = 1234567890
 
-# Device Cert passphrase
-$devicePassword="spinitar"
-
-# Password for PFX export
-$exportPassword="spinitar"
+[OutputFolderNames]
+;where to put the certs and other files
+;all files generated will be in the OutputFolder
+;files related to the Root Certificate will be in OutputFolder\RootFolder
+;files related to the Intermediate certificate will be in the OutputFolder\IntermediateFolder
+;files realted to the device will be in the OutputFolder\DeviceNameOrIp
+OutputFolder            = Output
+RootFolder              = Root
+IntermediateFolder      = Intermediate
 ```
 
+
 ## Output Folder
+- **settings.ini**     a copy of the settings.ini when the root cert is created
 - Root Folder
+  - **root_cert.cer**  this is the root certificate, upload this to all devices. This is used to sign the intermediate certificate
   - **cert.pem**       this is the root certificate, upload this to all devices. This is used to sign the intermediate certificate
   - **key.pem**        this is the encrypted key
   - **serial**         this is used by openssl when generating the cert, to keep track of certificates signed serial numbers
@@ -58,6 +72,7 @@ $exportPassword="spinitar"
   - **index.txt.attr** this is used by openssl when generating the cert
   - **ssl.cnf**        this is used by openssl when generating the cert, its a config file
 - Intermediate Folder
+  - **intermediate_cert.cer** this is the intermediate certificate, upload this to all devices. This is used to sign all the device certificates
   - **cert.pem**       this is the intermediate certificate, upload this to all devices. This is used to sign all the device certificates
   - **####.pem**       same as the cert.pem, automatic output by openssl
   - **chain.pem**      contains both the intermediate cert and the root cert
